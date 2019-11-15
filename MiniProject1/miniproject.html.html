@@ -1,0 +1,541 @@
+<html>
+<head>
+    <script type="text/javascript" src="https://d3js.org/d3.v5.min.js"></script>
+</head>
+
+<style>
+    body {
+        font-family: Helvetica, Arial, sans-serif
+    }
+    h1 {
+        background-color: #2a5599;
+        color: #FFFFFF;
+        padding: 5;
+    }
+    svg {
+        border: solid 1px #EEEEEE ;
+    }
+    .mainView {
+        display: flex;
+    }
+</style>
+
+<body>
+    <h1>Exercise: GraphDesign</h1>
+    <div class="mainView">
+        <div>
+            <h2>Visualization 1:</h2>
+            <p>How do the countries compare in terms of how much they receive and donate from other countries? Are there countries that donate much more than they receive or receive much more than they donate?</p>
+            <svg id="vis1"></svg>
+        </div>
+    </div>
+    <div class="mainView">
+        <div>
+            <h2>Visualization 2:</h2>
+            <p>Do the countries that receive or donate the most tend to cluster around specific geographical areas of the world? Are there neighboring countries that have radically different patterns in terms of how much they receive vs. how much they donate?</p>
+            <svg id="vis2"></svg>
+        </div>
+    </div>
+    <div class="mainView">
+        <div id="vis3">
+            <h2>Visualization 3:</h2>
+            <p>Are there any major differences in how the top 5 most frequent purposes of disbursements distribute geographically in terms of  countries that receive donations? Are there countries that tend to receive more of certain types of donations than others?</p>
+            <svg id="vis3p0"></svg>
+            <svg id="vis3p1"></svg>
+            <svg id="vis3p2"></svg>
+            <svg id="vis3p3"></svg>
+            <svg id="vis3p4"></svg>           
+        </div>
+    </div>
+</body>
+
+<script> 
+    let store = {}
+
+    function loadData() {
+        return Promise.all([
+            d3.csv("aiddata-countries-only.csv"),
+            d3.json("countries.geo.json"),
+        ]).then(datasets => {
+            store.aiddata = datasets[0];
+            store.geoJSON = datasets[1]
+            return store;
+        })
+    }
+
+    function groupByCountry(data) {
+        let result = data.reduce((result, d) => {
+            let country = d.donor
+            if (d.donor == "United States") country = "United States of America"
+            else if (d.donor == "Korea") country = "South Korea"
+            
+            let currentDonate = result[country] || {
+                "country": country,
+                "donate": 0,
+                "receive": 0,
+                "diff": 0,
+                "purpose": d.coalesced_purpose_name
+            }
+
+            currentDonate.donate -= Number(d.commitment_amount_usd_constant)
+            currentDonate.diff -= Number(d.commitment_amount_usd_constant)
+            result[country] = currentDonate;
+
+            country = d.recipient
+            if (d.recipient == "United States") country = "United States of America"
+            else if (d.recipient == "Korea") country = "South Korea"
+            let currentReceive = result[country] || {
+                "country": country,
+                "donate": 0,
+                "receive": 0,
+                "diff": 0,
+                "purpose": d.coalesced_purpose_name
+            }
+            currentReceive.receive += Number(d.commitment_amount_usd_constant)
+            currentReceive.diff += Number(d.commitment_amount_usd_constant)
+            result[country] = currentReceive;
+
+            return result;
+        }, {})
+        return result
+    }
+
+    function orderByDiffer(data) {
+        let result = data     
+        result = Object.keys(result).map(key => result[key])
+
+        result = result.sort(function(c1, c2) { //Sort the data in descending order of receive - donate.
+            return d3.descending(c1.diff, c2.diff);
+        })
+        return result
+    }
+
+    function getTop5Purpose(data) {
+        let result = data.reduce((result, d) => {
+            let currentData = result[d.coalesced_purpose_name] || {
+                "purpose": d.coalesced_purpose_name,
+                "count": 0,
+            }
+            currentData.count += 1
+            result[d.coalesced_purpose_name] = currentData;
+
+            return result;
+        }, {})
+        
+        result["Sectors not specified"].count = 0; 
+        result = Object.keys(result).map(key => result[key])
+        result = result.sort(function(c1, c2) { //Sort the data in descending order of purpose frequency.
+            return d3.descending(c1.count, c2.count);
+        })
+        return result.slice(0, 5) //return top 5
+    }
+
+    function groupByPurpose(purpose) {
+        let data = store.aiddata;
+
+        let result = data.reduce((result, d) => {
+
+            let country = d.recipient
+            if (d.recipient == "United States") country = "United States of America"
+            else if (d.recipient == "Korea") country = "South Korea"
+            
+            let currentData = result[country] || {
+                "country": country,
+                "receive": 0,
+            }
+
+            if (d.coalesced_purpose_name == purpose) {
+                currentData.receive += Number(d.commitment_amount_usd_constant)
+            }
+            result[country] = currentData;
+    
+            return result;
+        }, {})
+        result = Object.keys(result).map(key => result[key])    
+        return result
+
+        // return { receive, pairReceiveWithId, pairCountryWithId }
+    }
+
+    function getConfig(id, w, h, t, b, l, r) {
+        let width = w;
+        let height = h;
+        let margin = {
+            top: t,
+            bottom: b,
+            left: l,
+            right: r
+        }
+
+        let bodyHeight = height - margin.top - margin.bottom
+        let bodyWidth = width - margin.right - margin.left 
+
+        let container = d3.select("#"+id)
+        container
+            .attr("width", width)
+            .attr("height", height)
+
+        return { width, height, margin, bodyHeight, bodyWidth, container }
+    }
+
+    function getVisChartScales(data, config) {
+        let { bodyWidth, bodyHeight } = config;
+        let maxDonate = d3.min(data, d => d.donate ? d.donate : 0);
+        let maxReceive = d3.max(data, d => d.receive);
+        let minReceive = d3.min(data, d => d.receive);
+        let xMin = maxDonate == 0 ? minReceive : maxDonate
+
+        let xScale = d3.scaleLinear()
+            .range([0, bodyWidth])
+            .domain([xMin, maxReceive])
+
+            
+        let yScale = d3.scaleBand()
+            .range([0, bodyHeight])
+            .domain(data.map(a => a.country)) 
+        return { xScale, yScale }
+    }
+
+    function drawAxesChart(scales, config){
+        let {xScale, yScale} = scales
+        let {container, margin, height} = config;
+        let axisX = d3.axisBottom(xScale)
+            .ticks(10)
+            .tickFormat(function(d) {
+                if (d < 0) d = -d
+                return d
+            })
+
+        container.append("g")
+            .style("transform", 
+                `translate(${margin.left}px,${height - margin.bottom}px)`
+            )
+            .call(axisX)
+            .selectAll("text")
+            .attr("transform", "rotate(-10)")
+
+        let axisY = d3.axisLeft(yScale) 
+
+        container.append("g")
+            .style("transform",
+                `translate(${margin.left}px,${margin.top}px)`
+            )
+            .call(axisY) 
+    }
+
+    function drawVis1Chart(data) {
+        
+        let getCountry = (d) => d.data.country
+        let keys = ['donate', 'receive']
+        let stack = d3.stack().keys(keys).order(d3.stackOrderNone).offset(d3.stackOffsetDiverging)
+        let series = stack(data)
+        let colors = ["#2c7fb8", "#a1dab4"]
+
+        let stackMax = (serie) => d3.max(serie, (d) => d ? d[1] : 0)
+        let stackMin = (serie) => d3.min(serie, (d) => d? d[0]: 0)
+
+        let config = getConfig("vis1", 1350, 1000, 50, 50, 130, 350);
+        let scales = getVisChartScales(data, config)
+
+        let {margin, container} = config;
+        let {xScale, yScale} = scales
+        let body = container.append("g")
+            .style("transform", 
+                `translate(${margin.left}px,${margin.top}px)`
+            )
+        body.append("g")
+            .append("text")
+            .attr("y", -20)
+            .attr("x", -120)
+            .text("Percentage of receive and donate");
+
+        let l_width = 30, l_height = 15, l_x = 920, l_y = 0
+        let l_text1 = "Donate"
+        let l_text2 = "Receive"
+
+        body.append("rect") //legend donate
+            .attr("x", l_x)
+            .attr("y", l_y)
+            .attr("width", l_width)
+            .attr("height", l_height)
+            .attr("fill", colors[0])
+        body.append("text")
+            .attr("x", l_x + l_width + 10)
+            .attr("y", l_y + 12)
+            .text(l_text1)
+        body.append("rect") //legend receive
+            .attr("x", l_x)
+            .attr("y", l_y + 25)
+            .attr("width", l_width)
+            .attr("height", l_height)
+            .attr("fill", colors[1])                
+        body.append("text")
+            .attr("x", l_x + l_width + 10)
+            .attr("y", l_y + 37)
+            .text(l_text2)
+
+        let bar = body.selectAll('.bar')
+            .data(series)
+            .enter()
+            .append('g')
+            .attr('fill', (d, i) => colors[i % colors.length])
+            .selectAll('rect')
+            .data((d) => d)
+            .enter()
+            .append('rect')
+            .attr('y', (d) => yScale(getCountry(d))) 
+            .attr('x', (d) => xScale(d[0]))
+            .attr('height', yScale.bandwidth()-4)
+            .attr('width', (d) => xScale(d[1]) - xScale(d[0]))
+          
+        drawAxesChart(scales, config)       
+    }
+
+    function drawVis2Map(data, colors, id) {
+
+        let pairDiffWithCountry = {};
+        let diff = [];
+        data = Object.keys(data).map(key => data[key]) 
+        data.forEach(function(d) {
+            pairDiffWithCountry[d.country] = +d.diff; 
+            diff.push(+d.diff)
+        })
+
+        diff.sort((a, b) => a-b);
+        diff[0] = -diff[diff.length-1]
+
+        let min = d3.min(diff)
+        let max = d3.max(diff)
+        
+        let A = d3.quantile(diff, 0);  
+        let B = d3.quantile(diff, 0.25);  
+        let C = d3.quantile(diff, 0.5);
+        let D = d3.quantile(diff, 0.75);  
+        let E = d3.quantile(diff, 1); 
+        let color_domain = [A, B, C, D, E];
+        let color_domain_labels = color_domain.map(d => d)
+        let color_range = colors;
+        let colorScale = d3.scaleLinear()
+            .domain(color_domain)
+            .range(color_range);
+        let opacityScale = d3.scaleLinear()
+            .domain([0, max])
+            .range([.2, 1])
+
+
+        let width = 1200, height = 900
+        let countries = store.geoJSON.features
+        let config = getConfig(id, width, height, 50, 50, 50, 50);
+        let { container } = config
+
+        let projection = d3.geoMercator()      
+        projection.scale(186)
+            .translate([width / 2, height / 2 + 200])
+        let path = d3.geoPath()
+            .projection(projection)
+
+        container.append("g")
+            .selectAll("path")
+            .data(countries)
+            .enter().append("path")
+            .attr("d", path)
+            .attr("stroke", "#AAA") 
+            .attr("fill", (d) => {
+                let col = pairDiffWithCountry[d.properties.name] ? d3.color(colorScale(pairDiffWithCountry[d.properties.name])) : "white"
+                return col
+            })
+            .attr("opacity", (d) => {
+                let r = pairDiffWithCountry[d.properties.name] ? pairDiffWithCountry[d.properties.name] : 0
+                r = r<0 ? -r : r
+                return opacityScale(r)
+            })
+
+        addGradientHueLegend(container, color_domain, color_range, min, max)
+    }
+
+    function addGradientHueLegend(container, color_domain, color_range, min, max) {
+
+        let legend = container.selectAll("g.legend")
+            .data(color_domain)
+            .enter().append("g")
+            .attr("class", "legend")
+
+        for (let i=0; i<color_range.length-1 ; i++) {
+            let defs = container.append("defs");
+            let linearGradient = defs.append("linearGradient")
+                .attr("id", "linear-gradient"+i);
+            linearGradient
+                .attr("x1", "0%")
+                .attr("y1", "0%")
+                .attr("x2", "100%")
+                .attr("y2", "0%")
+                //.attr("spreadMethod", "pad")
+
+            linearGradient.append("stop")
+                .attr("offset", "0%")
+                .attr("stop-color", color_range[i])
+                //.attr("stop-opacity", 0) //light color
+
+            linearGradient.append("stop")
+                .attr("offset", "100%")
+                .attr("stop-color", color_range[i+1])
+                //.attr("stop-opacity",1) //dark color
+        }
+
+        let ls_w = 150, ls_h = 20, legend_left = 560, ls_y =850;
+        legend.append("rect")
+            .attr("x", (d, i) => legend_left+ i*ls_w)
+            .attr("y", ls_y)
+            .attr("width", ls_w)
+            .attr("height", ls_h)
+            .attr("fill", (d, i) => "url(#linear-gradient"+i+")")
+ 
+        let x = d3.scaleLinear()
+            .range([legend_left, ls_w*4+legend_left])
+            .domain([min, max])
+
+        let xAxis = d3.axisBottom(x)
+            .ticks(5)
+            .tickValues([min, min+(max-min)*0.25, min+(max-min)*0.5, min+(max-min)*0.75, max])
+        container.append("g")
+            .attr("transform", "translate(0," + (ls_y+ls_h) + ")")
+            .call(xAxis)
+            .attr("font-size", 15)
+
+        let title = "Differences between Received and Donated Donations"
+        container.append("g")
+            .append("text")
+            .attr("x", 20)
+            .attr("y", 60)
+            .attr("font-size", 30)
+            .text(title);
+
+        let text = "Diff = Total Amount of (Received donations - Donated donations)"
+        container.append("g")
+            .append("text")
+            .attr("x", legend_left)
+            .attr("y", ls_y - 5)
+            .attr("font-size", 18)
+            .text(text)
+    }
+
+    function drawVis3Map(data, title, color, id) {
+
+        let pairReceiveWithCountry = {};
+        let receive = [];
+
+        data.forEach(function(d) {
+            pairReceiveWithCountry[d.country] = +d.receive; 
+            receive.push(+d.receive)
+        })
+
+        receive.sort((a, b) => a-b);
+
+        let min = d3.min(receive)
+        let max = d3.max(receive)
+        let opacityScale = d3.scaleLinear()
+            .domain([min, max])
+            .range([.2, 1])
+
+        let width = 600, height = 500
+        let countries = store.geoJSON.features
+
+        let config = getConfig(id, width, height, 50, 50, 50, 50);
+        let { container } = config
+
+        let projection = d3.geoMercator()
+        
+        projection.scale(93)
+            .translate([width / 2, height / 2 + 110])
+
+        let path = d3.geoPath()
+            .projection(projection)
+
+        container.append("g")
+            .selectAll("path")
+            .data(countries)
+            .enter().append("path")
+            .attr("d", path)
+            .attr("stroke", "#AAA") 
+            .attr("fill", (d) => {
+                let col = pairReceiveWithCountry[d.properties.name] ? color : "white"
+                return col
+            })
+            .attr("opacity", (d) => {
+                let r = pairReceiveWithCountry[d.properties.name] ? pairReceiveWithCountry[d.properties.name] : d3.min(receive)
+                return opacityScale(r)
+            })
+        
+        addGradientOpacityLegend(container, color, title, min, max, id)
+    }
+
+    function addGradientOpacityLegend(container, color, title, min, max, id) {
+
+        let defs = container.append("defs");
+        let linearGradient = defs.append("linearGradient")
+            .attr("id", "linear-gradient"+id);
+        linearGradient
+            .attr("x1", "0%")
+            .attr("y1", "0%")
+            .attr("x2", "100%")
+            .attr("y2", "0%")
+            .attr("spreadMethod", "pad")
+
+        linearGradient.append("stop")
+            .attr("offset", "0%")
+            .attr("stop-color", color)
+            .attr("stop-opacity", 0) //light color
+
+        linearGradient.append("stop")
+            .attr("offset", "100%")
+            .attr("stop-color", color)
+            .attr("stop-opacity",1) //dark color
+    
+
+        let ls_w = 320, ls_h = 20, legend_left = 230, ls_y =450;
+        container.append("rect")
+            .attr("x", legend_left)
+            .attr("y", ls_y)
+            .attr("width", ls_w)
+            .attr("height", ls_h)
+            .attr("fill", "url(#linear-gradient"+id+")")
+ 
+        let x = d3.scaleLinear()
+            .range([legend_left, ls_w+legend_left])
+            .domain([min, max])
+
+        let xAxis = d3.axisBottom(x)
+            .ticks(5)
+            .tickValues([min, min+(max-min)*0.25, min+(max-min)*0.5, min+(max-min)*0.75, max])
+        container.append("g")
+            .attr("transform", "translate(0," + (ls_y+ls_h) + ")")
+            .call(xAxis)
+
+        container.append("g")
+            .append("text")
+            .attr("x", 20)
+            .attr("y", 60)
+            .text(title);
+    }
+
+    function showData() {
+
+        let aiddata = groupByCountry(store.aiddata);
+        let aiddataByDiffer = orderByDiffer(aiddata);
+        drawVis1Chart(aiddataByDiffer)
+        
+        let colors = ["#33505D", "#538B9C", "#EFF2AF", "#5B9D6E", "#215249"]
+        drawVis2Map(aiddata, colors, "vis2")
+
+        colors = ["#4D2322", "#342C40", "#013635", "#273412", "#492714"]
+        let purposes = getTop5Purpose(store.aiddata)
+        let data
+        for (let i=0; i<5; i++) {
+            data = groupByPurpose(purposes[i].purpose)
+            drawVis3Map(data, "Amount of Received Donations for "+purposes[i].purpose, colors[i], "vis3p"+i)
+        }
+    }
+
+    loadData().then(showData);
+</script>
+</html>
