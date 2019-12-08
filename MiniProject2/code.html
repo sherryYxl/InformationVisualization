@@ -1,0 +1,511 @@
+<html>
+<head>
+    <script type="text/javascript" src="https://d3js.org/d3.v5.min.js"></script>
+</head>
+
+<style>
+    body {
+        font-family: Helvetica, Arial, sans-serif
+    }
+    h1 {
+        background-color: #2a5599;
+        color: #FFFFFF;
+        padding: 5;
+    }
+    svg {
+        border: solid 1px #EEEEEE ;
+    }
+    .mainView {
+        display: flex;
+    }
+
+    .line {
+        fill: none;
+    }
+</style>
+
+<body>
+    <h1>Exercise: Graph Design (Time)</h1>
+    <div class="mainView">
+        <div>
+            <h2>Visualization 1:</h2>
+            <p>a) How does the amount donated vs. amount received change over time across all countries?</p>
+            <p>b) Are there countries that mostly send or mostly receive and countries that have a similar amount of donations they receive and send?</p>
+            <p>c) Are there countries that change their role over time? That is, they used to mostly send donations and turn into mostly receiving donations and vice-versa?</p> 
+            <p>d) Are there countries in which you can find a sudden increase ("peak") or a sudden decrease ("valley")?</p>
+            <div id="vis1"></div>
+        </div>
+    </div>
+    <div class="mainView">
+        <div>
+            <h2>Visualization 2:</h2>
+            <p>Focusing on the Coalesced Purpose of the donations, focus on the top 10 donations purposes. What are the top 10 purposes of disbursements (in terms of total amount of disbursement) and how does their relative amount compare over time? E.g.,  are there purposes that tend to be prominent for a period of time and others that become more prominent during other periods? Hint: looking at the graph one should be able to say something like: "Ah! During these years donations were mostly about X but then there were way more donations about Y".</p>
+            <svg id="vis2"></svg>
+        </div>
+    </div>
+    <div class="mainView">
+        <div>
+            <h2>Visualization 3:</h2>
+            <p>Build an interactive version of the visualization you developed for "Visualization 2" so that it is possible to ask the same question but for specific countries, that is, visualize the evolution over time of the top-10 donation purposes for a selected country (it's ok to focus on the top-10 overall, not top-10 for the selected country).</p>          
+            <div style="width:auto; height:auto; float:left; display:inline">
+                <svg id="vis3-list"></svg>
+            </div>
+            <div id="vis3Div" style="width:auto; height:auto; float:left; display:inline">
+                <svg id="vis3"></svg>
+            </div>
+        </div>
+    </div>
+</body>
+
+<script> 
+    let store = {}
+
+    function loadData() {
+
+        let promise = d3.csv("aiddata-countries-only.csv");
+
+        return promise.then(aiddata => {
+            store.aiddata = aiddata
+            return store;
+        })
+
+    }
+
+    function getCountries(data) {
+
+        let result = data.reduce((result, d) => {
+            let currentDonate = result[d.donor] || {
+                "country": d.donor,
+            }
+            result[d.donor] = currentDonate;
+
+            let currentReceive = result[d.recipient] || {
+                "country": d.recipient,
+            }
+            result[d.recipient] = currentReceive;
+
+            return result;
+        }, {})
+
+        return Object.keys(result)
+    }
+
+    function addBlankYear(data) {
+        for (var y = 1973; y <= 2013; y++) {
+            let year = y.toString();
+            if (!data[year]) {
+                data[year] = {
+                    "year": new Date(year, 0),
+                    "donate": 0,
+                    "receive": 0
+                }
+            }
+        }
+        return data;
+    }
+
+    function groupByCountry(country, data) {
+
+        let result = data.reduce((result, d) => {
+            //console.log(d.donor+d.year);
+            if (d.donor == country) {
+                let currentDonate = result[d.year] || {
+                    "year": new Date(d.year, 0),
+                    "donate": 0,
+                    "receive": 0
+                }
+
+                currentDonate.donate += +d.commitment_amount_usd_constant
+                result[d.year] = currentDonate;
+            }
+            
+            else if (d.recipient == country) {
+                let currentReceive = result[d.year] || {
+                    "year": new Date(d.year, 0),
+                    "donate": 0,
+                    "receive": 0
+                }
+
+                currentReceive.receive += +d.commitment_amount_usd_constant
+                result[d.year] = currentReceive;
+            }
+
+            return result;
+        }, {})
+
+        result = addBlankYear(result);
+        result = Object.keys(result).map(key => result[key])
+        return result
+    }
+
+    function getTop10Purpose(data) {
+        let purposes = data.reduce((purposes, d) => {
+            let currentData = purposes[d.coalesced_purpose_name] || {
+                "purpose": d.coalesced_purpose_name,
+                "amount": 0
+            }
+            currentData.amount += +d.commitment_amount_usd_constant
+            purposes[d.coalesced_purpose_name] = currentData;
+
+            return purposes;
+        }, {})
+        
+        purposes["Sectors not specified"].amount = 0; 
+        purposes = Object.keys(purposes).map(key => purposes[key])
+        purposes = purposes.sort(function(c1, c2) { //Sort the data in descending order of purpose frequency.
+            return d3.descending(c1.amount, c2.amount);
+        })
+
+        let top10 = purposes.slice(0, 10).map(d => d.purpose)
+        return top10
+    }
+
+    function getTop10OverTime(purpose) {
+        let result = store.aiddata.reduce((result, d) => {
+            if (d.coalesced_purpose_name == purpose) {
+                let currentData = result[d.year] || {
+                    "year": new Date(d.year, 0),
+                    "donate": 0
+                }
+
+                currentData.donate += +d.commitment_amount_usd_constant
+                result[d.year] = currentData
+            }
+
+            return result;
+        }, {})
+
+        result = addBlankYear(result);
+        result = Object.keys(result).map(key => result[key])
+        return result;
+    }
+
+    function getTop10GroupByCountry(country, purpose) {
+        let result = store.aiddata.reduce((result, d) => {
+            if (d.coalesced_purpose_name == purpose && d.donor == country) {
+                let currentData = result[d.year] || {
+                    "year": new Date(d.year, 0),
+                    "donate": 0
+                }
+                currentData.donate += +d.commitment_amount_usd_constant
+                result[d.year] = currentData
+            }
+            return result;
+        }, {})
+
+        result = addBlankYear(result);
+        result = Object.keys(result).map(key => result[key])
+        return result;
+    }
+
+    function getConfig(id, w, h, r) {
+        let width = w; //600;
+        let height = h; //200;
+        let margin = {
+            top: 50,
+            bottom: 20,
+            left: 80,
+            right: r
+        }
+
+        let bodyHeight = height - margin.top - margin.bottom
+        let bodyWidth = width - margin.right - margin.left 
+
+        let container = d3.select("#"+id)
+        container
+            .attr("width", width)
+            .attr("height", height)
+
+        return { width, height, margin, bodyHeight, bodyWidth, container }
+    }
+
+    function getVisLinesScales(yMax, config) {
+        let { bodyWidth, bodyHeight } = config;
+        let yMin = 0;
+
+        let xMin = new Date(1973, 0);
+        let xMax = new Date(2013, 0);
+    
+        let xScale = d3.scaleTime()
+            .range([0, bodyWidth])
+            .domain([xMin, xMax]);
+            
+        let yScale = d3.scaleLinear()
+            .range([bodyHeight, 0])
+            .domain([yMin, yMax]);
+
+        return {xScale, yScale}
+    }
+
+    function drawAxesChart(scales, config){
+        let {xScale, yScale} = scales
+        let {container, margin, height} = config;
+        let axisX = d3.axisBottom(xScale)
+            .ticks(21)
+            .tickFormat(d3.timeFormat("%Y"))
+
+        container.append("g")
+            .style("transform", 
+                `translate(${margin.left}px,${height - margin.bottom}px)`
+            )
+            .call(axisX)
+            .selectAll("text")
+            .attr("transform", "rotate(-10)")
+
+        let axisY = d3.axisLeft(yScale) 
+
+        container.append("g")
+            .style("transform",
+                `translate(${margin.left}px,${margin.top}px)`
+            )
+            .call(axisY) 
+    }
+
+    function drawVis1Chart(data, index, country) {
+        let id = "vis1-"+index
+
+        let svg = d3.select("#vis1")
+            .append("svg")
+            .attr("id", id);
+
+        let config = getConfig(id, 600, 200, 50);
+
+        let receiveMax = d3.max(data, d => d.receive);
+        let donateMax = d3.max(data, d => d.donate);
+        let yMax = Math.max(receiveMax, donateMax);
+
+        let scales = getVisLinesScales(yMax, config);
+
+        let {margin, container} = config;
+        let {xScale, yScale} = scales
+        let body = container.append("g")
+            .style("transform", 
+                `translate(${margin.left}px,${margin.top}px)`
+            )
+
+        body.append("text")
+            .attr("x", -70)
+            .attr("y", -20)
+            .text(country)
+
+        let donateLegendCoordinates = [
+            {"x": 450, "y": -20},
+            {"x": 470, "y": -20}
+        ]
+
+        let receiveLegendCoordinates = [
+            {"x": 450, "y": -5},
+            {"x": 470, "y": -5}
+        ]
+
+        let legend = d3.line()
+            .x(d => d.x)
+            .y(d => d.y)
+
+        body.append("path")
+            .datum(donateLegendCoordinates)
+            .style("stroke", "red")
+            .attr("class", "line")
+            .attr("d", legend);
+
+        body.append("path")
+            .datum(receiveLegendCoordinates)
+            .style("stroke", "blue")
+            .attr("class", "line")
+            .attr("d", legend);
+
+        body.append("text")
+            .attr("x", 475)
+            .attr("y", -17)
+            .attr("font-size", 10)
+            .text("Donate");
+        body.append("text")
+            .attr("x", 475)
+            .attr("y", -2)
+            .attr("font-size", 10)
+            .text("Receive");
+
+        let donateLine = d3.line()
+            .x(d => xScale(d.year))
+            .y(d => yScale(d.donate))
+
+        let receiveLine = d3.line()
+            .x(d => xScale(d.year))
+            .y(d => yScale(d.receive))
+
+        body.append("path")
+            .datum(data)
+            .style("stroke", "red")
+            .attr("class", "line")
+            .attr("d", donateLine);
+
+        body.append("path")
+            .datum(data)
+            .style("stroke", "blue")
+            .attr("class", "line")
+            .attr("d", receiveLine)
+        
+        drawAxesChart(scales, config);
+
+    }
+
+    function drawVis2Frame(purposes, yMax, colors, country, id) {
+
+        let config = getConfig(id, 1300, 800, 300);
+        let scales = getVisLinesScales(yMax, config);
+
+        let {margin, container} = config;
+        let {xScale, yScale} = scales
+        let body = container.append("g")
+            .style("transform", 
+                `translate(${margin.left}px,${margin.top}px)`
+            )
+
+        let title = (country == "") ? "Top 10 Donation Purposes" : "Top 10 Donation Purposes of " + country 
+        body.append("text")
+            .attr("x", -50)
+            .attr("y", -20)
+            .attr("font-size", 20)
+            .text(title)
+
+        let legend = d3.line()
+            .x(d => d.x)
+            .y(d => d.y)
+
+        for (var i = 0; i < 10; i++) {
+            let legendCoordinates = [
+                {"x": 1000, "y": i * 15 - 20},
+                {"x": 1020, "y": i * 15 - 20}
+            ];
+
+            body.append("path")
+            .datum(legendCoordinates)
+            .style("stroke", colors[i])
+            .attr("stroke-width", 3)
+            .attr("class", "line")
+            .attr("d", legend);
+
+            body.append("text")
+                .attr("x", 1025)
+                .attr("y", legendCoordinates[0].y + 3)
+                .attr("font-size", 10)
+                .text(purposes[i]);            
+
+        }
+
+        drawAxesChart(scales, config);
+
+        return {body, scales};
+    }
+
+    function addLines(frame, purposes, colors, data) {
+        let body = frame.body
+        let {xScale, yScale} = frame.scales
+
+        let donateLine = d3.line()
+                .x(d => xScale(d.year))
+                .y(d => yScale(d.donate))
+
+        for (var i = 0; i < 10; i++) {
+            body.append("path")
+                .datum(data[i])
+                .style("stroke", colors[i])
+                .attr("stroke-width", 1.5)
+                .attr("class", "line")
+                .attr("d", donateLine);
+        }
+    }
+
+    function listenToVis3(countries, top10, colors) {
+
+        let listBody = d3.select("#vis3-list")
+        listBody.attr("width", 200)
+            .attr("height", 800)
+        listBody.append("text")
+            .attr("x", 10)
+            .attr("y", 30)
+            .attr("font-size", 15)
+            .text("Select A Country: ");
+
+        let allButtons = listBody.append("g")
+            .attr("id", "allButtons")
+
+        let buttonGroups = allButtons.selectAll("g.button")
+            .data(countries)
+            .enter()
+            .append("g")
+            .attr("class", "button")
+            //.style("cursor","pointer")
+            .on("click", function(d, i) {
+
+                
+                d3.select(this.parentNode).selectAll("rect").attr("fill", "white");
+                d3.select(this).select("rect").attr("fill", "blue");
+
+                let vis3 = d3.select("#vis3Div")
+                vis3.selectAll("svg").remove();
+                vis3.append("svg")
+                    .attr("id", "vis3");
+                let aiddata = new Array(10);
+                let amountMax = 0;
+                for (var j = 0; j < 10; j++) {
+                    aiddata[j] = getTop10GroupByCountry(countries[i], top10[j]);
+                    let currMax = d3.max(aiddata[j], d => d.donate)
+                    amountMax = currMax > amountMax ? currMax : amountMax;
+                }
+                let frame = drawVis2Frame(top10, amountMax, colors, countries[i], "vis3");
+                addLines(frame, top10, colors, aiddata);
+            })
+
+        buttonGroups.append("rect")
+            .attr("class", "buttonRect")
+            .attr("width", 10)
+            .attr("height", 10)
+            .attr("x", 20)
+            .attr("y", (d, i) => {return 40 + i * 15})
+            .attr("rx", 5)
+            .attr("ry", 5)
+            .attr("fill", "white")
+            .attr("stroke", "black")
+
+        buttonGroups.append("text")
+            .attr("x", 40)
+            .attr("y", (d, i) => {return 50 + i * 15})
+            .attr("font-size", 10)
+            .text((d) => {return d}) 
+
+    }
+
+    function showData() {
+
+        let countries = getCountries(store.aiddata);
+        for (var i = 0; i < countries.length; i++) {
+            let aiddata = groupByCountry(countries[i], store.aiddata);
+            drawVis1Chart(aiddata, i, countries[i]);
+        }
+
+        let colors = ["#F98CA3", "#DF97C4", "#B3A6D7", "#7EB3D8", "#51BCC6", "#4CBFA5", "#6CBE80", "#95B860", "#BCAE4E", "#DFA153"];
+        let top10 = getTop10Purpose(store.aiddata);
+
+        let aiddata = new Array(10);
+        let amountMax = 0;
+        for (var i = 0; i < 10; i++) {
+            aiddata[i] = getTop10OverTime(top10[i]);
+            let currMax = d3.max(aiddata[i], d => d.donate)
+            amountMax = currMax > amountMax ? currMax : amountMax;
+        }
+
+        let frame2 = drawVis2Frame(top10, amountMax, colors, "", "vis2");
+        addLines(frame2, top10, colors, aiddata);
+        
+        let frame3 = drawVis2Frame(top10, amountMax, colors, "", "vis3");
+        addLines(frame3, top10, colors, aiddata);
+        listenToVis3(countries, top10, colors);
+        
+    }
+
+    loadData().then(showData);
+
+
+</script>
+</html>
